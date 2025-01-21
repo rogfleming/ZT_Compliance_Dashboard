@@ -1,0 +1,50 @@
+policyresources
+| where type == "microsoft.authorization/policydefinitions"
+| extend Def_AssessmentId = tostring(name)
+| project Def_AssessmentId
+| join kind=fullouter (
+  policyresources
+  | where type == "microsoft.authorization/policysetdefinitions"
+  | extend DisplayName = tostring(properties.displayName)
+  | where DisplayName in("NIST SP 800-53 Rev. 5","FedRAMP High","FedRAMP Moderate","NIST SP 800-171 Rev. 2","NIST SP 800-53 Rev. 4","FedRAMP Moderate")
+  | extend RCData = parse_json(tostring(parse_json(properties).policyDefinitions))
+  | mv-expand policy = RCData
+  | extend DefSet_AssessmentId = tostring(policy.policyDefinitionReferenceId)
+  | project DefSet_AssessmentId ) on $left.Def_AssessmentId==$right.DefSet_AssessmentId
+  | extend Def_AssessmentId = iff((Def_AssessmentId =="" and DefSet_AssessmentId !=""),DefSet_AssessmentId,Def_AssessmentId)
+  | extend Def_AssessmentId = iff((Def_AssessmentId !="" and DefSet_AssessmentId ==""),Def_AssessmentId,Def_AssessmentId)
+  | extend Def_AssessmentId= tolower(Def_AssessmentId)
+  | project Def_AssessmentId
+  | join kind=leftouter (policyresources
+    | where type == "microsoft.policyinsights/policystates"
+    | extend Res_policyDefinitionName = tostring(parse_json(properties.policyDefinitionName))
+    | extend Res_PolicyDefinitionReferenceId = tostring(properties.policyDefinitionReferenceId)
+    | extend Res_AssessmentId = iff(Res_policyDefinitionName == Res_PolicyDefinitionReferenceId,Res_policyDefinitionName,Res_PolicyDefinitionReferenceId)
+    ) on $left.Def_AssessmentId==$right.Res_AssessmentId
+    | extend Res_ResourceId = tostring(properties.resourceId)
+    | extend Res_ComplianceState = tostring(properties.complianceState)
+    | extend Res_ResourceType = tostring(properties.resourceType)
+    | extend Res_ResourceGroup = tostring(properties.resourceGroup)
+    | extend Res_PolicyDefinitionAction = tostring(properties.policyDefinitionAction)
+    | extend Res_ResourceLocation = tostring(properties.resourceLocation)
+    | where Res_AssessmentId !=""
+    | where tostring(properties.policySetDefinitionCategory) !="zero trust workbook"
+    | project Res_AssessmentId,Res_ComplianceState,Res_ResourceType,Res_ResourceGroup,Res_PolicyDefinitionAction,Res_ResourceId,Res_ResourceLocation
+    | join kind=fullouter (
+    securityresources
+    | where type == "microsoft.security/assessments"
+    | extend DfC_AssessmentId = tostring(name)
+    ) on $left.Res_AssessmentId==$right.DfC_AssessmentId
+    | extend DfC_ResourceId = tostring(properties.resourceDetails.ResourceId)
+    | extend DfC_ComplianceState = tostring(properties.status.code)
+    | extend DfC_ResourceType = tostring(properties.resourceDetails.ResourceType)
+    | extend DfC_ResourceName = tostring(properties.resourceDetails.ResourceName)
+    | extend DfC_PolicyDefinitionAction = "Audit"
+    | extend AssessmentId = iff(Res_AssessmentId =="",DfC_AssessmentId,Res_AssessmentId)
+    | extend ResourceId = iff(Res_ResourceId =="",DfC_ResourceId,Res_ResourceId)
+    | extend ComplianceState = iff(Res_ComplianceState =="",DfC_ComplianceState,Res_ComplianceState)
+    | extend ResourceType = iff(Res_ResourceType =="",DfC_ResourceType,Res_ResourceType)
+    | extend ResourceName = iff(Res_ResourceGroup =="",DfC_ResourceName,Res_ResourceGroup)
+    | extend PolicyDefinitionAction = iff(Res_PolicyDefinitionAction =="",DfC_PolicyDefinitionAction,Res_PolicyDefinitionAction)
+    | extend ResourceLocation = iff(Res_ResourceLocation =="","Azure Global",Res_ResourceLocation)
+    | project AssessmentId,ResourceId,ComplianceState,ResourceType,ResourceName,PolicyDefinitionAction,ResourceLocation
